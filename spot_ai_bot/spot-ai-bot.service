@@ -1,0 +1,15 @@
+[Unit]
+Description=Spot AI Crypto Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/spot-ai-bot
+ExecStart=/opt/spot-ai-bot/.venv/bin/python /opt/spot-ai-bot/src/bot.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/opt/spot-ai-bot/.env
+
+[Install]
+WantedBy=multi-user.target

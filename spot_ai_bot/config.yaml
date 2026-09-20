@@ -1,0 +1,63 @@
+exchange:
+  name: bybit
+  quote: USDT
+  category: spot
+  primary_interval: 15
+  fast_interval: 5
+  universe_limit: 100
+  fast_confirm_limit: 40
+
+challenge:
+  starting_equity_usd: 200
+  target_equity_usd: 2000
+  horizon_days: 60
+  stretch_monthly_return_min_pct: 200
+  stretch_monthly_return_max_pct: 500
+  max_total_drawdown_pct: 50
+  never_risk_entire_account: true
+
+strategy:
+  max_price_change_pct: 50
+  min_score: 78
+  min_liquidity_usd: 1000000
+  min_volume_ratio: 2.0
+  breakout_lookback: 40
+  atr_period: 14
+  stop_atr_multiple: 1.8
+  base_position_pct: 12.5
+  normal_position_min_pct: 10
+  normal_position_max_pct: 15
+  exceptional_position_max_pct: 25
+  exceptional_score: 92
+  max_open_positions: 10
+  cooldown_minutes: 90
+  trailing_activation_pct: 4
+  trailing_atr_multiple: 1.5
+  partial_take_profit_pct: 0.40
+  partial_take_profit_rr: 1.5
+  final_take_profit_rr: 3.0
+
+risk:
+  risk_per_trade_pct: 2.0
+  max_position_pct: 25
+  max_daily_loss_pct: 8.0
+  max_drawdown_pct: 50.0
+  max_slippage_pct: 0.50
+  reserve_cash_pct: 10
+  max_total_exposure_pct: 90
+
+safety:
+  require_ai_confirmation: false
+  max_manipulation_risk: 35
+  max_contract_risk: 15
+  max_holder_concentration_risk: 30
+  reject_new_tokens_days: 7
+  reject_if_data_stale_seconds: 180
+
+learning:
+  min_closed_trades_before_calibration: 30
+  calibration_window: 100
+  save_rejected_candidates: true
+  adaptive_thresholds_enabled: true
+  adaptive_threshold_floor: 78
+  adaptive_threshold_ceiling: 90

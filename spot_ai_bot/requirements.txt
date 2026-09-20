@@ -1,0 +1,8 @@
+pybit>=5.13.0
+pandas>=2.2.0
+numpy>=1.26.0
+PyYAML>=6.0
+python-dotenv>=1.0.1
+requests>=2.32.0
+feedparser>=6.0.11
+openai>=1.100.0
