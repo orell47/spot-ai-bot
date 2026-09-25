@@ -751,23 +751,34 @@ def run_once():
             "דירוג לפי מומנטום + נפח + נזילות + סיכון",
         ]
         for i, x in enumerate(top5_hour, 1):
-            breakout_text = "YES" if x["breakout"] > 0 else "NO"
+            breakout_text = "🟢 YES" if x["breakout"] > 0 else "⚪ NO"
             liquidity_text = (
-                "GOOD"
+                "🟢 GOOD"
                 if x["spread_pct"] <= 0.30
                 and x["depth_usd"] >= CFG["strategy"]["min_liquidity_usd"]
-                else "CONCERN"
+                else "🟠 CONCERN"
             )
             fast_text = f"{x['fast_change_pct']:+.2f}%"
+
             top_lines.append(
-                f"{i}. {x['symbol']} — Hour {x['hour_score']:.0f}/100 | "
-                f"Trade {x['score']:.0f} | Risk {x['risk']:.0f}\n"
-                f"   1h: {x['hour_change_pct']:+.2f}% | "
-                f"Vol 1h: ${x['hour_volume_usd']:.0f} ({x['hour_volume_ratio']:.1f}x) | "
-                f"Vol 15m: {x['volume_ratio']:.1f}x\n"
-                f"   5m: {fast_text} | Breakout: {breakout_text} | "
-                f"Liquidity: {liquidity_text}"
+                f"{i}. {x['symbol']}\n"
+                f"   ⭐ Hour: {x['hour_score']:.0f}/100\n"
+                f"   🎯 Trade: {x['score']:.0f}  |  ⚠️ Risk: {x['risk']:.0f}\n"
+                f"   📈 1h: {x['hour_change_pct']:+.2f}%\n"
+                f"   🔊 Vol 1h: ${x['hour_volume_usd']:.0f} "
+                f"({x['hour_volume_ratio']:.1f}x avg)\n"
+                f"   🔊 Vol 15m: {x['volume_ratio']:.1f}x\n"
+                f"   ⚡ 5m: {fast_text}\n"
+                f"   🚀 Breakout: {breakout_text}\n"
+                f"   💧 Liquidity: {liquidity_text}"
             )
+
+        # Blank line between every coin so Telegram renders the list cleanly on phones.
+        top_lines = [
+            "📊 TOP 5 — LAST HOUR",
+            "━━━━━━━━━━━━━━",
+            *sum(([line, ""] for line in top_lines[2:]), []),
+        ]
         tg.send("\n".join(top_lines))
 
     tg.send(
