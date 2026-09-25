@@ -291,15 +291,22 @@ class Telegram:
 
     def send(self, text):
         if not self.enabled:
-            return
-        try:
-            r = requests.post(
-                f"https://api.telegram.org/bot{self.token}/sendMessage",
-                json={"chat_id": self.chat_id, "text": text},
-                timeout=15)
-            r.raise_for_status()
-        except Exception as ex:
-            log.warning("telegram: %s", ex)
+            log.warning("telegram is not configured")
+            return False
+        ok = True
+        # Telegram sendMessage has a 4096 character limit.
+        chunks = [text[i:i+3900] for i in range(0, len(text), 3900)] or [""]
+        for chunk in chunks:
+            try:
+                r = requests.post(
+                    f"https://api.telegram.org/bot{self.token}/sendMessage",
+                    json={"chat_id": self.chat_id, "text": chunk},
+                    timeout=15)
+                r.raise_for_status()
+            except Exception as ex:
+                ok = False
+                log.warning("telegram send failed: %s", ex)
+        return ok
 
 
 class Analyzer:
@@ -393,13 +400,19 @@ class Analyzer:
             risk += 25
             reasons.append("possible pump/manipulation pattern")
 
-        decision = (
-            "BUY"
-            if score >= CFG["strategy"]["min_score"]
-            and risk <= CFG["safety"]["max_manipulation_risk"]
-            and ret_24 <= CFG["strategy"]["max_price_change_pct"]
-            else "NO_TRADE"
-        )
+        rejection_reasons = []
+        min_score = float(CFG["strategy"]["min_score"])
+        max_risk = float(CFG["safety"]["max_manipulation_risk"])
+        max_change = float(CFG["strategy"]["max_price_change_pct"])
+
+        if score < min_score:
+            rejection_reasons.append(f"score {score:.0f} < required {min_score:.0f}")
+        if risk > max_risk:
+            rejection_reasons.append(f"risk {risk:.0f} > maximum {max_risk:.0f}")
+        if ret_24 > max_change:
+            rejection_reasons.append(f"24h rise {ret_24:.1f}% > allowed {max_change:.0f}%")
+
+        decision = "BUY" if not rejection_reasons else "NO_TRADE"
 
         stop = max(
             c.close - CFG["strategy"]["stop_atr_multiple"] * atr,
@@ -424,7 +437,8 @@ class Analyzer:
             "stop": float(stop),
             "target": float(target),
             "news": news,
-            "reasons": reasons
+            "reasons": reasons,
+            "rejection_reasons": rejection_reasons
         }
 
 
@@ -595,6 +609,15 @@ def run_once():
     market = Market()
     news = News()
     tg = Telegram()
+
+    # One-time Telegram connectivity test. It is only marked successful after
+    # Telegram confirms delivery, so a bad token/chat ID will keep retrying.
+    if tg.enabled and store.get("telegram_connection_test") != "1":
+        if tg.send(
+            "🤖 Spot AI Scanner — Telegram connection successful ✅\n"
+            "Paper Trading is active. Live trading is OFF."):
+            store.set("telegram_connection_test", "1")
+
     portfolio = Portfolio(store)
     broker = PaperBroker(store, portfolio, tg)
 
@@ -640,22 +663,49 @@ def run_once():
                 store.candidate(a)
                 ranked.append(a)
 
+                open_count = len(store.open_trades())
+                max_open = int(CFG["strategy"]["max_open_positions"])
+                if a["decision"] == "BUY":
+                    if open_count >= max_open:
+                        a["decision"] = "NO_TRADE"
+                        a["rejection_reasons"].append(
+                            f"maximum open positions reached ({max_open})")
+                    elif portfolio.kill:
+                        a["decision"] = "NO_TRADE"
+                        a["rejection_reasons"].append("kill switch is ON")
+                    else:
+                        tid = broker.buy(a)
+                        if tid:
+                            tg.send(
+                                f"🟢 PAPER BUY — {s}\n"
+                                f"Score: {a['score']:.0f} | Risk: {a['risk']:.0f}\n"
+                                f"Entry: {a['price']:.8f}\n"
+                                f"Stop: {a['stop']:.8f}\n"
+                                f"Target: {a['target']:.8f}\n"
+                                f"5m: {a['fast_change_pct']:.2f}% | "
+                                f"Vol: {a['volume_ratio']:.1f}x\n"
+                                f"Why entered: {', '.join(a['reasons'])}")
+                        else:
+                            a["decision"] = "NO_TRADE"
+                            a["rejection_reasons"].append(
+                                "position size too small or cash/reserve rules blocked the paper entry")
+
+                # Notify about interesting candidates even when the bot refuses to enter.
+                interesting_threshold = max(50.0, min_score - 10.0)
                 if (
-                    a["decision"] == "BUY"
-                    and len(store.open_trades()) < CFG["strategy"]["max_open_positions"]
-                    and not portfolio.kill
+                    a["decision"] == "NO_TRADE"
+                    and a["score"] >= interesting_threshold
                 ):
-                    tid = broker.buy(a)
-                    if tid:
-                        tg.send(
-                            f"🟢 PAPER BUY\n{s}\n"
-                            f"Score: {a['score']:.0f} | Risk: {a['risk']:.0f}\n"
-                            f"Entry: {a['price']:.8f}\n"
-                            f"Stop: {a['stop']:.8f}\n"
-                            f"Target: {a['target']:.8f}\n"
-                            f"5m: {a['fast_change_pct']:.2f}% | "
-                            f"Vol: {a['volume_ratio']:.1f}x\n"
-                            f"Reasons: {', '.join(a['reasons'])}")
+                    ranked.append(a)
+                    tg.send(
+                        f"🟡 INTERESTING — NO ENTRY\n"
+                        f"{s}\n"
+                        f"Score: {a['score']:.0f} | Risk: {a['risk']:.0f}\n"
+                        f"Price: {a['price']:.8f}\n"
+                        f"24h: {a['change_pct']:.2f}% | 5m: {a['fast_change_pct']:.2f}%\n"
+                        f"Volume: {a['volume_ratio']:.1f}x | Breakout: {a['breakout']:.2f}%\n"
+                        f"Why not entered: {', '.join(a['rejection_reasons']) or 'entry rules not fully satisfied'}\n"
+                        f"Signals: {', '.join(a['reasons'])}")
             except Exception as e:
                 log.warning("%s: %s", s, e)
     finally:
