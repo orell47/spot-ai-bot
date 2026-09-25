@@ -291,22 +291,15 @@ class Telegram:
 
     def send(self, text):
         if not self.enabled:
-            log.warning("telegram is not configured")
-            return False
-        ok = True
-        # Telegram sendMessage has a 4096 character limit.
-        chunks = [text[i:i+3900] for i in range(0, len(text), 3900)] or [""]
-        for chunk in chunks:
-            try:
-                r = requests.post(
-                    f"https://api.telegram.org/bot{self.token}/sendMessage",
-                    json={"chat_id": self.chat_id, "text": chunk},
-                    timeout=15)
-                r.raise_for_status()
-            except Exception as ex:
-                ok = False
-                log.warning("telegram send failed: %s", ex)
-        return ok
+            return
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{self.token}/sendMessage",
+                json={"chat_id": self.chat_id, "text": text},
+                timeout=15)
+            r.raise_for_status()
+        except Exception as ex:
+            log.warning("telegram: %s", ex)
 
 
 class Analyzer:
@@ -320,7 +313,8 @@ class Analyzer:
         c = df.iloc[-1]
         prev = df.iloc[-2]
 
-        ret_24 = (c.close / df.iloc[-97].close - 1) * 100 if len(df) > 97 else (c.close / df.iloc[0].close - 1) * 100
+        ret_24 = (c.close / df.iloc[-97].close - 1) * 100 if len(df) > 97 else (
+            c.close / df.iloc[0].close - 1) * 100
 
         lookback = CFG["strategy"]["breakout_lookback"]
         recent_high = df.iloc[-(lookback + 1):-1].high.max()
@@ -347,6 +341,30 @@ class Analyzer:
             fast_ret = (fc.close / fast_df.iloc[-25].close - 1) * 100
             fvm = fast_df.volume.iloc[-21:-1].mean()
             fast_vr = fc.volume / fvm if fvm else 0
+
+        # Last-hour metrics (4 x 15m candles).
+        hour_ret = 0.0
+        hour_volume_usd = 0.0
+        hour_volume_ratio = 0.0
+        if len(df) >= 25:
+            hour_ret = (c.close / df.iloc[-5].close - 1) * 100
+            recent_1h = df.iloc[-4:].copy()
+            recent_1h["volume_usd"] = recent_1h["volume"] * recent_1h["close"]
+            hour_volume_usd = float(recent_1h["volume_usd"].sum())
+
+            hourly_volumes = []
+            for end in range(len(df) - 4, 3, -4):
+                block = df.iloc[max(0, end - 4):end]
+                if len(block) < 4:
+                    continue
+                hourly_volumes.append(float((block["volume"] * block["close"]).sum()))
+
+            if hourly_volumes:
+                previous_hour_avg = float(np.mean(hourly_volumes))
+                hour_volume_ratio = (
+                    hour_volume_usd / previous_hour_avg
+                    if previous_hour_avg > 0 else 0.0
+                )
 
         reasons = []
         score = 0
@@ -400,19 +418,31 @@ class Analyzer:
             risk += 25
             reasons.append("possible pump/manipulation pattern")
 
-        rejection_reasons = []
-        min_score = float(CFG["strategy"]["min_score"])
-        max_risk = float(CFG["safety"]["max_manipulation_risk"])
-        max_change = float(CFG["strategy"]["max_price_change_pct"])
+        # Separate 0-100 ranking for "best suited right now / last hour".
+        # Informational only; it does not replace the BUY/NO_TRADE decision.
+        hour_score = 0.0
+        if hour_ret > 0:
+            hour_score += min(25.0, hour_ret * 8.0)
+        if hour_volume_ratio >= 1.0:
+            hour_score += min(25.0, hour_volume_ratio * 8.0)
+        if vr >= 1.0:
+            hour_score += min(15.0, vr * 5.0)
+        if fast_ret > 0:
+            hour_score += min(10.0, fast_ret * 8.0)
+        if breakout > 0:
+            hour_score += min(15.0, breakout * 20.0)
+        if ob["spread_pct"] <= 0.30 and ob["depth_usd"] >= CFG["strategy"]["min_liquidity_usd"]:
+            hour_score += 10.0
+        hour_score -= min(30.0, risk * 0.35)
+        hour_score = max(0.0, min(100.0, hour_score))
 
-        if score < min_score:
-            rejection_reasons.append(f"score {score:.0f} < required {min_score:.0f}")
-        if risk > max_risk:
-            rejection_reasons.append(f"risk {risk:.0f} > maximum {max_risk:.0f}")
-        if ret_24 > max_change:
-            rejection_reasons.append(f"24h rise {ret_24:.1f}% > allowed {max_change:.0f}%")
-
-        decision = "BUY" if not rejection_reasons else "NO_TRADE"
+        decision = (
+            "BUY"
+            if score >= CFG["strategy"]["min_score"]
+            and risk <= CFG["safety"]["max_manipulation_risk"]
+            and ret_24 <= CFG["strategy"]["max_price_change_pct"]
+            else "NO_TRADE"
+        )
 
         stop = max(
             c.close - CFG["strategy"]["stop_atr_multiple"] * atr,
@@ -426,6 +456,10 @@ class Analyzer:
             "decision": decision,
             "price": float(c.close),
             "change_pct": float(ret_24),
+            "hour_change_pct": float(hour_ret),
+            "hour_volume_usd": float(hour_volume_usd),
+            "hour_volume_ratio": float(hour_volume_ratio),
+            "hour_score": float(hour_score),
             "volume_ratio": float(vr),
             "fast_change_pct": float(fast_ret),
             "fast_volume_ratio": float(fast_vr),
@@ -437,8 +471,7 @@ class Analyzer:
             "stop": float(stop),
             "target": float(target),
             "news": news,
-            "reasons": reasons,
-            "rejection_reasons": rejection_reasons
+            "reasons": reasons
         }
 
 
@@ -609,15 +642,6 @@ def run_once():
     market = Market()
     news = News()
     tg = Telegram()
-
-    # One-time Telegram connectivity test. It is only marked successful after
-    # Telegram confirms delivery, so a bad token/chat ID will keep retrying.
-    if tg.enabled and store.get("telegram_connection_test") != "1":
-        if tg.send(
-            "🤖 Spot AI Scanner — Telegram connection successful ✅\n"
-            "Paper Trading is active. Live trading is OFF."):
-            store.set("telegram_connection_test", "1")
-
     portfolio = Portfolio(store)
     broker = PaperBroker(store, portfolio, tg)
 
@@ -663,49 +687,30 @@ def run_once():
                 store.candidate(a)
                 ranked.append(a)
 
-                open_count = len(store.open_trades())
-                max_open = int(CFG["strategy"]["max_open_positions"])
-                if a["decision"] == "BUY":
-                    if open_count >= max_open:
-                        a["decision"] = "NO_TRADE"
-                        a["rejection_reasons"].append(
-                            f"maximum open positions reached ({max_open})")
-                    elif portfolio.kill:
-                        a["decision"] = "NO_TRADE"
-                        a["rejection_reasons"].append("kill switch is ON")
-                    else:
-                        tid = broker.buy(a)
-                        if tid:
-                            tg.send(
-                                f"🟢 PAPER BUY — {s}\n"
-                                f"Score: {a['score']:.0f} | Risk: {a['risk']:.0f}\n"
-                                f"Entry: {a['price']:.8f}\n"
-                                f"Stop: {a['stop']:.8f}\n"
-                                f"Target: {a['target']:.8f}\n"
-                                f"5m: {a['fast_change_pct']:.2f}% | "
-                                f"Vol: {a['volume_ratio']:.1f}x\n"
-                                f"Why entered: {', '.join(a['reasons'])}")
-                        else:
-                            a["decision"] = "NO_TRADE"
-                            a["rejection_reasons"].append(
-                                "position size too small or cash/reserve rules blocked the paper entry")
+                log.info(
+                    "🔎 CHECK %s | hour_score=%.0f/100 | 1h=%+.2f%% | "
+                    "1h volume=$%.0f (%.1fx avg) | 15m vol=%.1fx | decision=%s",
+                    s, a["hour_score"], a["hour_change_pct"],
+                    a["hour_volume_usd"], a["hour_volume_ratio"],
+                    a["volume_ratio"], a["decision"]
+                )
 
-                # Notify about interesting candidates even when the bot refuses to enter.
-                interesting_threshold = max(50.0, min_score - 10.0)
                 if (
-                    a["decision"] == "NO_TRADE"
-                    and a["score"] >= interesting_threshold
+                    a["decision"] == "BUY"
+                    and len(store.open_trades()) < CFG["strategy"]["max_open_positions"]
+                    and not portfolio.kill
                 ):
-                    ranked.append(a)
-                    tg.send(
-                        f"🟡 INTERESTING — NO ENTRY\n"
-                        f"{s}\n"
-                        f"Score: {a['score']:.0f} | Risk: {a['risk']:.0f}\n"
-                        f"Price: {a['price']:.8f}\n"
-                        f"24h: {a['change_pct']:.2f}% | 5m: {a['fast_change_pct']:.2f}%\n"
-                        f"Volume: {a['volume_ratio']:.1f}x | Breakout: {a['breakout']:.2f}%\n"
-                        f"Why not entered: {', '.join(a['rejection_reasons']) or 'entry rules not fully satisfied'}\n"
-                        f"Signals: {', '.join(a['reasons'])}")
+                    tid = broker.buy(a)
+                    if tid:
+                        tg.send(
+                            f"🟢 PAPER BUY\n{s}\n"
+                            f"Score: {a['score']:.0f} | Risk: {a['risk']:.0f}\n"
+                            f"Entry: {a['price']:.8f}\n"
+                            f"Stop: {a['stop']:.8f}\n"
+                            f"Target: {a['target']:.8f}\n"
+                            f"5m: {a['fast_change_pct']:.2f}% | "
+                            f"Vol: {a['volume_ratio']:.1f}x\n"
+                            f"Reasons: {', '.join(a['reasons'])}")
             except Exception as e:
                 log.warning("%s: %s", s, e)
     finally:
@@ -720,20 +725,50 @@ def run_once():
         key=lambda x: (x["decision"] == "BUY", x["score"]),
         reverse=True)
 
-    print("\nTOP CANDIDATES")
-    for x in ranked[:15]:
+    top5_hour = sorted(
+        ranked,
+        key=lambda x: (x["hour_score"], x["hour_volume_usd"]),
+        reverse=True
+    )[:5]
+
+    print("\nTOP 5 — LAST HOUR")
+    for i, x in enumerate(top5_hour, 1):
         print(
-            x["symbol"], x["decision"],
-            f"score={x['score']:.0f}",
-            f"risk={x['risk']:.0f}",
-            f"24h={x['change_pct']:.1f}%",
-            f"5m={x['fast_change_pct']:.1f}%",
-            f"vol={x['volume_ratio']:.1f}x"
+            f"{i}. {x['symbol']} | hour_score={x['hour_score']:.0f}/100 | "
+            f"1h={x['hour_change_pct']:+.2f}% | "
+            f"1h volume=${x['hour_volume_usd']:.0f} ({x['hour_volume_ratio']:.1f}x avg) | "
+            f"15m volume={x['volume_ratio']:.1f}x | "
+            f"trade_score={x['score']:.0f} | risk={x['risk']:.0f} | {x['decision']}"
         )
 
     start = CFG["challenge"]["starting_equity_usd"]
     target = CFG["challenge"]["target_equity_usd"]
     progress = (eq / start - 1) * 100
+
+    if top5_hour:
+        top_lines = [
+            "📊 TOP 5 — LAST HOUR",
+            "דירוג לפי מומנטום + נפח + נזילות + סיכון",
+        ]
+        for i, x in enumerate(top5_hour, 1):
+            breakout_text = "YES" if x["breakout"] > 0 else "NO"
+            liquidity_text = (
+                "GOOD"
+                if x["spread_pct"] <= 0.30
+                and x["depth_usd"] >= CFG["strategy"]["min_liquidity_usd"]
+                else "CONCERN"
+            )
+            fast_text = f"{x['fast_change_pct']:+.2f}%"
+            top_lines.append(
+                f"{i}. {x['symbol']} — Hour {x['hour_score']:.0f}/100 | "
+                f"Trade {x['score']:.0f} | Risk {x['risk']:.0f}\n"
+                f"   1h: {x['hour_change_pct']:+.2f}% | "
+                f"Vol 1h: ${x['hour_volume_usd']:.0f} ({x['hour_volume_ratio']:.1f}x) | "
+                f"Vol 15m: {x['volume_ratio']:.1f}x\n"
+                f"   5m: {fast_text} | Breakout: {breakout_text} | "
+                f"Liquidity: {liquidity_text}"
+            )
+        tg.send("\n".join(top_lines))
 
     tg.send(
         f"🤖 SCAN COMPLETE\n"
@@ -744,6 +779,7 @@ def run_once():
         f"Drawdown: {dd:.2f}%\n"
         f"Daily PnL: ${daily:.2f}\n"
         f"Scanned: {len(ranked)}\n"
+        f"Top 5 last hour: {', '.join(x['symbol'] for x in top5_hour)}\n"
         f"Kill switch: {'ON' if portfolio.kill else 'OFF'}\n"
         f"Min score: {min_score:.0f}"
     )
