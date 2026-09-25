@@ -313,8 +313,7 @@ class Analyzer:
         c = df.iloc[-1]
         prev = df.iloc[-2]
 
-        ret_24 = (c.close / df.iloc[-97].close - 1) * 100 if len(df) > 97 else (
-            c.close / df.iloc[0].close - 1) * 100)
+        ret_24 = (c.close / df.iloc[-97].close - 1) * 100 if len(df) > 97 else (c.close / df.iloc[0].close - 1) * 100
 
         lookback = CFG["strategy"]["breakout_lookback"]
         recent_high = df.iloc[-(lookback + 1):-1].high.max()
