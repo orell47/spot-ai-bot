@@ -1,63 +1,70 @@
 exchange:
-  name: bybit
-  quote: USDT
+  name: bybit_public_v5
   category: spot
+  quote: USDT
   primary_interval: 15
   fast_interval: 5
-  universe_limit: 100
-  fast_confirm_limit: 40
+  universe_limit: 80
+  liquid_bucket: 30
+  mover_bucket: 30
+  altcoin_bucket: 30
+  fast_confirm_limit: 80
+  min_24h_turnover_usd: 250000
+  large_cap_turnover_usd: 50000000
 
 challenge:
   starting_equity_usd: 200
   target_equity_usd: 2000
+  max_drawdown_pct: 50
   horizon_days: 60
-  stretch_monthly_return_min_pct: 200
-  stretch_monthly_return_max_pct: 500
-  max_total_drawdown_pct: 50
-  never_risk_entire_account: true
 
 strategy:
-  max_price_change_pct: 50
-  min_score: 78
-  min_liquidity_usd: 1000000
-  min_volume_ratio: 2.0
-  breakout_lookback: 40
-  atr_period: 14
-  stop_atr_multiple: 1.8
-  base_position_pct: 12.5
-  normal_position_min_pct: 10
-  normal_position_max_pct: 15
-  exceptional_position_max_pct: 25
-  exceptional_score: 92
+  # Lower than the old 78 because the new score is more granular.
+  # This is not a quota: the bot is never required to trade.
+  min_score: 68
+  min_confirmations: 3
+  exceptional_score: 86
+  exceptional_position_max_pct: 18
+  base_position_pct: 10
+  trade_size_min_usd: 10
+  trade_size_max_usd: 15
   max_open_positions: 10
-  cooldown_minutes: 90
-  trailing_activation_pct: 4
-  trailing_atr_multiple: 1.5
-  partial_take_profit_pct: 0.40
-  partial_take_profit_rr: 1.5
-  final_take_profit_rr: 3.0
+  min_liquidity_usd: 75000
+  max_spread_pct: 0.35
+  breakout_lookback: 20
+  breakout_buffer_pct: 0.10
+  retest_tolerance_pct: 0.35
+  atr_period: 14
+  tp_atr_multiple: 1.8
+  tp1_min_pct: 3.0
+  tp2_min_pct: 6.0
+  tp3_min_pct: 10.0
+  partial_take_profit_pct: 0.35
+  tp2_close_pct: 0.40
+  trailing_activation_pct: 6.0
+  soft_trailing_pct: 3.0
+  structure_exit_max_loss_pct: -3.5
+  deep_orderbook_score: 74
+  deep_orderbook_1h_pct: 2.0
 
 risk:
-  risk_per_trade_pct: 2.0
-  max_position_pct: 25
-  max_daily_loss_pct: 8.0
+  risk_per_trade_pct: 0.65
+  max_position_pct: 18
+  max_total_exposure_pct: 80
+  reserve_cash_pct: 15
+  max_daily_loss_pct: 3.0
   max_drawdown_pct: 50.0
+  min_trade_usd: 7
+  emergency_loss_pct: 8.0
   max_slippage_pct: 0.50
-  reserve_cash_pct: 10
-  max_total_exposure_pct: 90
 
 safety:
-  require_ai_confirmation: false
   max_manipulation_risk: 35
-  max_contract_risk: 15
-  max_holder_concentration_risk: 30
-  reject_new_tokens_days: 7
-  reject_if_data_stale_seconds: 180
 
 learning:
+  adaptive_thresholds_enabled: true
   min_closed_trades_before_calibration: 30
   calibration_window: 100
+  adaptive_threshold_floor: 64
+  adaptive_threshold_ceiling: 74
   save_rejected_candidates: true
-  adaptive_thresholds_enabled: true
-  adaptive_threshold_floor: 78
-  adaptive_threshold_ceiling: 90
